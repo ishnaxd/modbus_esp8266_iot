@@ -1,0 +1,116 @@
+#include <ModbusRTU.h>
+#include <ESP8266WiFi.h>
+#include<ESP8266WebServer.h>
+#include "ThingSpeak.h"
+ModbusRTU mb;
+
+#include <SoftwareSerial.h>
+int DE_RE = 4; //D4  For MAX485 chip
+int RX = 12;
+int TX = 13;
+int led;
+unsigned long lastTime = 0;
+unsigned long timerDelay = 30000;
+unsigned long channel_num=1855350;
+String SendHTML(void){
+ String ptr = "<!DOCTYPE html> <html>\n";
+ ptr +="<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+ ptr +="<title>LED Control</title>\n";
+ ptr +="<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+ ptr +="body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
+ ptr +=".button {display: block;width: 80px;background-color: #1abc9c;border: none;color: white;padding: 13px 30px;text-decoration: none;font-size: 25px;margin: 0px auto 35px;cursor: pointer;border-radius: 4px;}\n";
+ ptr +=".button-on {background-color: #1abc9c;}\n";
+ ptr +=".button-on:active {background-color: #16a085;}\n";
+ ptr +=".button-off {background-color: #34495e;}\n";
+ ptr +=".button-off:active {background-color: #2c3e50;}\n";
+ ptr +="p {font-size: 14px;color: #888;margin-bottom: 10px;}\n";
+ ptr +="</style>\n";
+ ptr +="</head>\n";
+ ptr +="<body>\n";
+ ptr +="<h1>ESP8266 with ThingSpeak Server</h1>\n";
+ ptr +="<h3>Using Station(STA) Mode</h3>\n";
+ ptr +="<h4>Control status For D1</h4>\n";
+ ptr +="<a class=\"button button-on\" href=\"https://api.thingspeak.com/update?api_key=ID27SQOJYDYDOOZ6&field1=1\">ON</a>\n";
+ ptr +="<a class=\"button button-off\" href=\"https://api.thingspeak.com/update?api_key=ID27SQOJYDYDOOZ6&field1=0\">OFF</a>\n";
+ ptr +="</body>\n";
+ ptr +="</html>\n";
+ return ptr;
+}
+ESP8266WebServer server(80);
+void handleonconnect()
+{
+ server.send(200,"text/html",SendHTML());
+}
+
+const char* ssid = "pushkar";   // your network SSID (name) 
+const char* password = "123456789";   // your network password
+unsigned long myChannelNumber = 4;
+const char * myWriteAPIKey = "S8ZUZ0H9038HJEC5";
+
+WiFiClient  client;
+
+
+SoftwareSerial S(RX, TX);//D6/D7  (RX , TX)
+
+uint16_t Mread0[2];
+
+bool cbWrite(Modbus::ResultCode event, uint16_t transactionId, void* data) {
+  Serial.printf_P("Request result: 0x%02X, Mem: %d\n", event, ESP.getFreeHeap());
+  return true;
+}
+float InttoFloat(uint16_t Data0,uint16_t Data1) {
+  float x;
+  unsigned long *p;
+  p = (unsigned long*)&x;
+  *p = (unsigned long)Data0 << 16 | Data1; //Big-endian
+  return(x);
+}
+
+void setup() {
+  pinMode(D1,OUTPUT);
+ digitalWrite(D1,0);
+  Serial.begin(19200);
+  S.begin(19200, SWSERIAL_8E1);
+  WiFi.mode(WIFI_STA);   
+  
+  ThingSpeak.begin(client);
+  mb.begin(&S, DE_RE); //Assing Software serial port to Modbus instance for MAX485 chip having DI,DE,RE,RO Pin at TTL side
+  mb.master(); //Assing Modbus function as master
+  Serial.println(); //Print empty line
+  Serial.println(sizeof(Mread0)); //Reaing size of first array
+}
+void loop() {
+  if ((millis() - lastTime) > timerDelay) {
+    
+    // Connect or reconnect to WiFi
+    if(WiFi.status() != WL_CONNECTED){
+      Serial.print("Attempting to connect");
+      while(WiFi.status() != WL_CONNECTED){
+        WiFi.begin(ssid, password); 
+        delay(5000);     
+      } 
+      Serial.println("\nConnected.");
+    }
+     Serial.println(WiFi.localIP());    // print the wifi local ip
+ server.on("/",handleonconnect);    // in urt type the "/" then call the handle on connect function
+ ThingSpeak.begin(client);      // connect the client to the thingSpeak server
+ server.begin();   // start the server
+  if (!mb.slave()) {
+ server.handleClient();    // it realy handle the Client
+ led=ThingSpeak.readFloatField(channel_num,1);    // rad the last data of the field 1
+ if(led==1)
+ {
+   digitalWrite(D1,1);
+ }
+ else if(led==0)
+ {
+   digitalWrite(D1,0);
+ }
+    mb.readHreg(1, 3027, Mread0, 2 , cbWrite);  //(SlaevID,Address,Buffer,Range of data,Modus call)
+    Serial.println(InttoFloat(Mread0[0], Mread0[1]));
+     int x = ThingSpeak.writeField(myChannelNumber, 1,InttoFloat(Mread0[0], Mread0[1]) , myWriteAPIKey);
+  }
+  mb.task();
+  delay(1000);
+  yield();
+}}
